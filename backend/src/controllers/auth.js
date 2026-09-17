@@ -113,6 +113,27 @@ class AuthController {
 
       // Generate JWT token
       const token = authService.generateToken(user);
+      
+      // Generate Refresh Token
+      const refreshTokenString = authService.generateRandomToken();
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days
+
+      await prisma.refreshToken.create({
+        data: {
+          token: refreshTokenString,
+          userId: user.id,
+          expiresAt,
+        }
+      });
+
+      // Set cookie
+      res.cookie('refresh_token', refreshTokenString, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      });
 
       res.json({
         success: true,
@@ -142,14 +163,75 @@ class AuthController {
    */
   async logout(req, res, next) {
     try {
-      // For JWT, we don't maintain server-side sessions
-      // The client will remove the token
+      const refreshToken = req.cookies?.refresh_token;
+
+      if (refreshToken) {
+        await prisma.refreshToken.deleteMany({
+          where: { token: refreshToken }
+        });
+      }
+
+      res.clearCookie('refresh_token');
+
       res.json({
         success: true,
         message: "Logout successful",
       });
     } catch (error) {
       logger.error("Logout error", { error: error.message });
+      next(error);
+    }
+  }
+
+  /**
+   * Refresh token
+   */
+  async refreshToken(req, res, next) {
+    try {
+      const refreshToken = req.cookies?.refresh_token;
+
+      if (!refreshToken) {
+        return res.status(401).json({
+          success: false,
+          message: "No refresh token provided",
+        });
+      }
+
+      // Find token in DB
+      const tokenRecord = await prisma.refreshToken.findUnique({
+        where: { token: refreshToken },
+        include: { user: true }
+      });
+
+      if (!tokenRecord) {
+        res.clearCookie('refresh_token');
+        return res.status(401).json({
+          success: false,
+          message: "Invalid refresh token",
+        });
+      }
+
+      // Check if expired or revoked
+      if (tokenRecord.expiresAt < new Date() || tokenRecord.isRevoked) {
+        await prisma.refreshToken.delete({ where: { id: tokenRecord.id } });
+        res.clearCookie('refresh_token');
+        return res.status(401).json({
+          success: false,
+          message: "Refresh token expired or revoked",
+        });
+      }
+
+      // Generate new access token
+      const token = authService.generateToken(tokenRecord.user);
+
+      res.json({
+        success: true,
+        data: {
+          token,
+        },
+      });
+    } catch (error) {
+      logger.error("Refresh token error", { error: error.message });
       next(error);
     }
   }

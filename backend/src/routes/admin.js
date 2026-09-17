@@ -23,6 +23,27 @@ router.post('/login', [
 ], adminController.login);
 
 /**
+ * @route   POST /api/admin/request-reset
+ * @desc    Request password reset email
+ * @access  Public
+ */
+router.post('/request-reset', [
+  body('email').isEmail().withMessage('Please provide a valid email').normalizeEmail(),
+  handleValidationErrors
+], adminController.requestPasswordReset);
+
+/**
+ * @route   POST /api/admin/reset-password
+ * @desc    Confirm password reset with token
+ * @access  Public
+ */
+router.post('/reset-password', [
+  body('token').notEmpty().withMessage('Token is required'),
+  body('newPassword').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+  handleValidationErrors
+], adminController.confirmPasswordReset);
+
+/**
  * @route   POST /api/admin/logout
  * @desc    Admin logout
  * @access  Private (Admin)
