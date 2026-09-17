@@ -87,6 +87,7 @@ class ApiClient {
   private backendAvailable: boolean | null = null;
   private lastHealthCheck: number = 0;
   private healthCheckInterval: number = 5 * 60 * 1000; // 5 minutes
+  private isRefreshing = false;
 
   constructor() {
     this.baseURL = API_CONFIG.BASE_URL;
@@ -159,6 +160,7 @@ class ApiClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     const requestOptions: RequestInit = {
+      credentials: 'include',
       ...options,
       headers: {
         ...this.getHeaders(includeAuth),
@@ -195,9 +197,29 @@ class ApiClient {
 
           // Handle specific error cases
           if (response.status === HTTP_STATUS.UNAUTHORIZED) {
-            this.removeAuthToken();
-            // Trigger logout in Zustand store
-            window.dispatchEvent(new CustomEvent("api:unauthorized"));
+            // Try to refresh token if not already refreshing and not auth endpoints
+            if (!this.isRefreshing && endpoint !== API_ENDPOINTS.AUTH.REFRESH && endpoint !== API_ENDPOINTS.AUTH.LOGIN) {
+              this.isRefreshing = true;
+              try {
+                const refreshResponse = await this.refreshToken();
+                this.isRefreshing = false;
+                
+                // Retry the original request
+                return await this.makeRequest(endpoint, options, includeAuth);
+              } catch (refreshError) {
+                this.isRefreshing = false;
+                this.removeAuthToken();
+                window.dispatchEvent(new CustomEvent("api:unauthorized"));
+                throw apiError;
+              }
+            } else if (endpoint === API_ENDPOINTS.AUTH.REFRESH || endpoint === API_ENDPOINTS.AUTH.LOGIN) {
+              this.removeAuthToken();
+              window.dispatchEvent(new CustomEvent("api:unauthorized"));
+            } else if (this.isRefreshing) {
+              // If already refreshing, just wait a bit and retry (simple backoff)
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              return await this.makeRequest(endpoint, options, includeAuth);
+            }
           }
 
           throw apiError;

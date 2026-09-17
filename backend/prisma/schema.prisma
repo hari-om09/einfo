@@ -39,6 +39,7 @@ model User {
   analytics ProfileAnalytic[]
   receivedStars ProfileStar[] @relation("ProfileUser")
   emailVerifications EmailVerification[]
+  refreshTokens RefreshToken[]
 
   @@map("users")
 }
@@ -313,6 +314,7 @@ model Admin {
   createdAdmins Admin[] @relation("AdminHierarchy")
   createdBy Admin? @relation("AdminHierarchy", fields: [createdByAdminId], references: [id])
   activityLogs AdminActivityLog[]
+  resetTokens AdminResetToken[]
 
   @@map("admins")
 }
@@ -344,4 +346,29 @@ model SystemStats {
   lastUpdated DateTime @default(now())
 
   @@map("system_stats")
+}
+
+model RefreshToken {
+  id String @id @default(cuid())
+  token String @unique
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  isRevoked Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("refresh_tokens")
+}
+
+model AdminResetToken {
+  id String @id @default(cuid())
+  token String @unique
+  adminId String
+  admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  isUsed Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("admin_reset_tokens")
 }

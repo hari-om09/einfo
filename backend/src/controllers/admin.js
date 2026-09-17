@@ -1,6 +1,8 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const emailService = require('../services/email');
 const logger = require('../utils/logger');
 
 const prisma = new PrismaClient();
@@ -456,6 +458,106 @@ class AdminController {
       res.json({
         success: true,
         message: 'Logged out successfully'
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Request password reset
+   */
+  async requestPasswordReset(req, res, next) {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Email is required' });
+      }
+
+      const admin = await prisma.admin.findUnique({ where: { email: email.toLowerCase() } });
+      if (!admin) {
+        // Return success even if admin doesn't exist to prevent email enumeration
+        return res.json({ success: true, message: 'If that email exists, a reset link has been sent.' });
+      }
+
+      // Generate token
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 1); // 1 hour expiration
+
+      // Save token to DB
+      await prisma.adminResetToken.create({
+        data: {
+          token,
+          adminId: admin.id,
+          expiresAt
+        }
+      });
+
+      // Send email
+      const resetUrl = `${process.env.CORS_ORIGINS?.split(',')[0] || 'http://localhost:5173'}/admin/reset-password?token=${token}`;
+      
+      try {
+        await emailService.sendEmail({
+          to: admin.email,
+          subject: 'Admin Password Reset Request',
+          text: `You requested a password reset. Click the link to reset your password: ${resetUrl}\nThis link expires in 1 hour.`,
+          html: `<p>You requested a password reset. Click the link below to reset your password:</p><p><a href="${resetUrl}">Reset Password</a></p><p>This link expires in 1 hour.</p>`
+        });
+      } catch (emailError) {
+        logger.error('Failed to send reset email', { error: emailError.message });
+      }
+
+      await this.logActivity(admin.id, 'request_password_reset', null, null, req);
+
+      res.json({
+        success: true,
+        message: 'If that email exists, a reset link has been sent.'
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Confirm password reset
+   */
+  async confirmPasswordReset(req, res, next) {
+    try {
+      const { token, newPassword } = req.body;
+      if (!token || !newPassword) {
+        return res.status(400).json({ success: false, message: 'Token and new password are required' });
+      }
+
+      const resetToken = await prisma.adminResetToken.findUnique({
+        where: { token },
+        include: { admin: true }
+      });
+
+      if (!resetToken || resetToken.isUsed || resetToken.expiresAt < new Date()) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
+      }
+
+      // Hash new password
+      const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+      // Update admin password
+      await prisma.admin.update({
+        where: { id: resetToken.adminId },
+        data: { password: hashedPassword }
+      });
+
+      // Mark token as used
+      await prisma.adminResetToken.update({
+        where: { id: resetToken.id },
+        data: { isUsed: true }
+      });
+
+      await this.logActivity(resetToken.adminId, 'confirm_password_reset', null, null, req);
+
+      res.json({
+        success: true,
+        message: 'Password has been successfully reset'
       });
     } catch (error) {
       next(error);
